@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+usage()
+{
+cat << EOF
+usage: ijob [supported args] [unsupported args]
+-n    | --num_cores         (4)                   Cores to request
+-W    | --walltime          (140:00)              Time to request
+-m    | --mem               (4000)                Memory per core (MB)
+-q    | --queue             (automatic)           LSF Queue
+-h    | --help                                    Brings up this menu
+EOF
+}
+
+mem=4000
+walltime="140:00"
+ncores=4
+queue="auto"
+
+while [ "$1" != "" ]; do
+  case $1 in
+    -n | --num_cores )
+      ncores="$2"
+      shift; shift
+      ;;
+    -W | --walltime )
+      walltime="$2"
+      shift; shift
+      ;;
+    -m | --mem )
+      mem="$2"
+      shift; shift
+      ;;
+    -q | --queue )
+      queue="$2"
+      shift; shift
+      ;;
+    -h | --help )    usage
+      exit
+      ;;
+    * )
+      # Store unrecognized arguments in an array
+      bsub_args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+export http_proxy=http://172.28.7.1:3128
+export https_proxy=http://172.28.7.1:3128
+export all_proxy=http://172.28.7.1:3128
+export no_proxy=localhost,*.chimera.hpc.mssm.edu,172.28.0.0/16
+
+if [[ $(($mem*$ncores)) -gt 190000 ]]; then
+  resreq="-R himem"
+else
+  resreq=""
+fi
+
+# Check if colon exists in $walltime
+if [[ $walltime == *:* ]]; then
+  # Extract the part before the colon
+  hours=${walltime%%:*}
+else
+  # No colon, assume the entire string represents minutes
+  hours=$(($walltime/60))
+fi
+
+if [[ $queue == "auto" ]]; then
+  if [[ $hours -le 12 ]]; then
+    [[ $resreq == "" ]] && queue="interactive" || queue='express'
+  elif [[ $hours -le 144 ]]; then
+    queue="premium"
+  else
+    queue="long"
+  fi
+fi
+
+export job_gotten=true
+bsub -P acc_LOAD -q $queue -R span[hosts=1] -R rusage[mem=$mem] -W $walltime -n $ncores $resreq ${bsub_args[@]} -Is $SHELL

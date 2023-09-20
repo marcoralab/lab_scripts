@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+. ~/.bashrc
+
+awk 'BEGIN {FS=OFS="=|[[:space:]]+"} \
+     NR == 1 {lb = ""} NR != 1 {lb == "\n"} \
+     $0 ~ "^name:|^channels:|^dependencies:" {print lb$0; next} \
+     1 {print "  - "$3; next}' \
+  $1 > test__test__test_orig.yaml
+
+mamba env create -f test__test__test_orig.yaml -n test__test__test 1>&2 && \
+  conda activate test__test__test && \
+  conda env export > test__test__test.yaml
+
+rm test__test__test_orig.yaml
+
+conda deactivate && \
+  conda env remove -n test__test__test &> /dev/null
+
+awk 'BEGIN {FS=OFS="=|[[:space:]]+"} \
+     $1 ~ ":$" {sect = $1} \
+     NR == 1 {lb = ""} NR != 1 {lb == "\n"} \
+     NR == FNR && $0 ~ "^name:|^channels:" {print lb$0; next} \
+     NR == FNR && sect == "channels:" && $3 != "" {print "  - "$3; next} \
+     NR == FNR && $3 != "" {a[$3]; next} \
+     NR == FNR {next} \
+     $1 == "dependencies:" {print "\n"$0; next} \
+     NR != FNR && ($3 ~ "^r-" || $3 in a) {print "  - "$3"="$4}' \
+  $1 test__test__test.yaml && rm test__test__test.yaml
+
+

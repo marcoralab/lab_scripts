@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+
+# This script generates a YAML file containing information about the dependencies of R packages.
+
+# Set the script version and initial values for command-line options
+VERSION=1.1
+no_ver=FALSE
+no_val=FALSE
+strip_extra=FALSE
+directory=FALSE
+yaml_in=FALSE
+update=FALSE
+
+# Function to display help information
+display_help() {
+  echo "Script Usage: script.sh [options]"
+  echo ""
+  echo "Options:"
+  echo "  -h, --help          Display this help information"
+  echo "  -v, --version       Print the script version number"
+  echo "  -d, --directory     Specify the directory to search for R package dependencies"
+  echo "  -y, --yaml          Specify an existing YAML file with R package dependencies"
+  echo "  --no-ver            Skip version retrieval and only perform validation"
+  echo "  --no-val            Skip validation and only retrieve versions"
+  echo "  -s, --strip-extra   Remove packages not specifically loaded or in yaml"
+  echo "  -u, --update        Update all packages in YAML to the latest possible version"
+  echo ""
+  echo "Use --directory or --yaml. Or you can use neither to search the current directory."
+  echo ""
+  exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -h|--help)
+    display_help
+    ;;
+    -v|--version)
+    echo -e "version: $VERSION\n"
+    exit
+    ;;
+    -d|--directory)
+    directory=$2
+    shift; shift
+    ;;
+    -y|--yaml)
+    yaml_in=$2
+    shift; shift
+    ;;
+    --no-ver)
+    no_ver=TRUE
+    shift
+    ;;
+    --no-val)
+    no_val=TRUE
+    shift
+    ;;
+    -s|--strip-extra)
+    strip_extra=TRUE
+    shift
+    ;;
+    -u|--update)
+    update=TRUE
+    shift
+    ;;
+    *)
+    echo -e "ignoring unknown option $1 \n"
+    shift
+    ;;
+  esac
+done
+
+# Source the ~/.bashrc file for custom Bash configurations
+. ~/.bashrc
+
+# Function to find dependencies based on the provided directory
+find_deps() {
+  find "$1" -iname '*.rmd' | read && xtrapkg="  - r-rmarkdown" || xtrapkg=""
+  find "$1" -iname '*.qmd' | read && xtrapkg="$xtrapkg\n  - quarto"
+  find "$1" -iname '*.R' -o -iname '*.RMD' -o -iname '*.QMD' | \
+    xargs -d '\n' grep -E "packload\(|pacman::|::|library\(|require\(" | \
+    grep -Ev "require\(x, character\.only = T\)\)" | \
+    sed 's/pacman::p_load/p_load/' | \
+    perl -pe 's/.+(library\(|packload\(|p_load\()(.+)\)+/\2/' | \
+    perl -pe 's/.+(\s|\(|:)(.+)::.+$/\2/' | \
+    sed -e $'s/, /\\n/g' -e 's/#.*$//' -e 's/[[:blank:]]+/ /g' \
+      -e 's/^\s|\s$//g' -e 's/)*$//g' -e 's/^(*//' -e 's/["]//g'| \
+    sed -r 's/[[:blank:]]+/ /g;s/^\s|\s$//g;s/[):]*$//g' | \
+    sort -u | \
+    awk '
+      BEGIN {
+        skip="stats|graphics|utils|datasets|methods|parallel|base"
+        print "channels:\n  - conda-forge\n\ndependencies:"
+      } \
+      $0 != "" && $1 !~ skip {
+        a[$1];
+        print "  - r-"tolower($0)
+      }
+      END {
+        if (length(a) > 0) {
+          print "  - r-base";
+          if (!("tidyverse" in a) && "dplyr" in a) print "  - r-tidyverse"
+          }
+      }' | cat - <(echo -e "$xtrapkg")
+}
+
+# Function to retrieve package versions and perform validation
+# Sets the $yaml_fixed and $yaml_all variables
+get_versions () {
+  local tried=FALSE
+  mamba env create -f $1 -n test__test__test 2>&1 | tee test_test_test.log >&2
+  if grep -q "Executing transaction: .* done" test_test_test.log; then
+    export yaml_fixed=$(cat $1)
+    cat test_test_test.log >&2
+    rm test_test_test.log
+    conda activate test__test__test && \
+    env_yaml=$(conda env export)
+
+    echo got environment >&2
+
+    conda deactivate && \
+      conda env remove -n test__test__test &> /dev/null
+
+    echo removed environment >&2
+    proc_env () {
+      awk 'BEGIN {FS=OFS="=|[[:space:]]+"} \
+       $1 ~ ":$" {sect = $1} \
+       NR == 1 {lb = ""} NR != 1 {lb == "\n"} \
+       NR == FNR && $0 ~ "^name:|^channels:" {print lb$0; next} \
+       NR == FNR && sect == "channels:" && $3 != "" {print "  - "$3; next} \
+       NR == FNR && $3 != "" {a[$3]; next} \
+       NR == FNR {next} \
+       $1 == "dependencies:" {print "\n"$0; next} \
+       NR != FNR && ($3 ~ "^r-" || $3 in a) {print "  - "$3"="$4}' \
+      $1 $2
+    }
+
+    export yaml_all=$(proc_env $1 <(echo "$env_yaml"))
+    echo processed environment >&2
+  elif grep -q "does not exist .perhaps a typo or a missing channel." test_test_test.log; then
+    add_bioconda () {
+      awk 'BEGIN {FS=OFS="=|[[:space:]]+"} \
+        $1 ~ "^channels:$" {chan = 1; print; next} \
+        chan == 1 && $3 == "bioconda" {bc = 1; print; next} \
+        $2 != "-" && !($1 ~ ":$") && bc != 1 {print "  - bioconda\n"; bc = 1; next} \
+        $1 ~ ":$" && chan == 1 && bc != 1 {print "  - bioconda\n\n"$0; chan = 0; bc = 1; next} \
+        $1 ~ ":$" {chan = 0; print; next} 1 {print}' $1
+    }
+    echo Some packages not found: >&2 
+    local bad_packages=$(awk '$0 ~ "does not exist \\(perhaps a typo or a missing channel)" {print $2}' test_test_test.log)
+    rm test_test_test.log
+    echo "$bad_packages" | awk '1 {print $1}' >&2
+    local step1=$(awk 'NR==FNR {a[$1]; next} $2 in a {sub("r-", "bioconductor-", $0)} 1 {print}' <(echo "$bad_packages") temp.yaml)
+    export yaml_fixed=$(add_bioconda <(echo "$step1"))
+    if [[ $tried == "TRUE" ]]; then
+      echo Could not resolve packages! >&2
+      return 1
+    fi
+    temp_file_fixyaml=$(mktemp)
+    mv $temp_file_fixyaml $temp_file_fixyaml.yaml
+    temp_file_fixyaml=$temp_file_fixyaml.yaml
+    echo "$yaml_fixed" > $temp_file_fixyaml
+    tried=TRUE
+    get_versions $temp_file_fixyaml
+    rm $temp_file_fixyaml
+  else
+    rm test_test_test.log
+    return 1
+  fi
+}
+
+# Create a temporary file with a .yaml extension
+deps=$(mktemp)
+mv $deps $deps.yaml
+deps=$deps.yaml
+
+# Build dependencies based on command line input
+if [[ $directory != "FALSE" ]]; then
+  if [[ $yaml_in != "FALSE" ]]; then
+    echo -e "--yaml and --directory cannot be used together.\n" >&2
+    exit 1
+  elif [[ $update == "TRUE" ]]; then
+    echo -e "Cannot use --update when searching directory"
+    exit 1
+  fi
+  find_deps $directory > $deps
+elif [[ $yaml_in != "FALSE" ]]; then
+  echo Using $yaml_in >&2
+  if [[ $update == "TRUE" ]]; then
+    awk 'BEGIN {FS="="} {print $1}' $yaml_in > $deps
+  else
+    cat $yaml_in > $deps
+  fi
+else
+  if [[ $update == "TRUE" ]]; then
+    echo -e "Cannot use --update when searching directory"
+    exit 1
+  fi
+  echo Searching in current directory. >&2
+  find_deps $PWD > $deps
+fi
+
+echo Validating and getting versions for environment. >&2
+
+# Perform validation and version retrieval based on command-line options
+if [[ no_val = "TRUE" ]]; then
+  if [[ no_ver == "TRUE" ]]; then
+    cat $deps
+    exit 0
+  else
+    echo -e "--no-ver must be used if --no-val is used." >&2
+    exit 1
+  fi
+else
+  get_versions $deps
+  if [[ no_ver == "TRUE" ]]; then
+    echo "$yaml_fixed"
+  elif [[ $strip_extra == "TRUE" ]]; then
+    grep --color=never -Fif <(sed '/^[[:space:]]*$/d' <(echo "$yaml_fixed")) <(echo "$yaml_all")
+  else
+    echo "$yaml_all"
+  fi
+fi
+
+# Remove the temporary file
+rm $deps

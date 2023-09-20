@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+temp_file=$(mktemp)
+mv $temp_file $temp_file.yaml
+temp_file=$temp_file.yaml
+
+find $1 -name '*.R*' | \
+  xargs grep -ER "packload\(|pacman::|::|library\(|require\(" | \
+  grep -Ev "require\(x, character\.only = T\)\)" | \
+  sed 's/pacman::p_load/p_load/' | \
+  perl -pe 's/.+(library\(|packload\(|p_load\()(.+)\)+/\2/' | \
+  perl -pe 's/.+(\s|\(|:)(.+)::.+$/\2/' | \
+  sed 's/)$//' | \
+  sed $'s/, /\\n/g' | sort | uniq | \
+  awk 'BEGIN {print "channels:\n  - conda-forge\n\ndependencies:"} \
+       $0 != "" {a[$1]; print "  - r-"$0} \
+       END {
+         if (length(a) > 0) {
+           print "  - r-base";
+           if (!(tidyverse in a)) print "  - r-tidyverse"
+         }
+       }' > $temp_file
+
+upd_conda_yaml $temp_file
+
+rm $temp_file

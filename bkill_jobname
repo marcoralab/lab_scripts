@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+## Kills all jobs containing regex term
+
+for i in $(bjobs -W | awk -v rx=$1 '$7 ~ rx {print $1}'); do
+  bkill $i
+done

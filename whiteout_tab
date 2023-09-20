@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+sed -r 's/[[:blank:]]+/\t/g;s/^\s|\s$//g' $1

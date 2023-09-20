@@ -1,0 +1,48 @@
+#!/usr/bin/env Rscript
+
+suppressPackageStartupMessages(library(dplyr))
+library(readr)
+library(stringr)
+
+ncores <- function(x) {
+  y <- str_extract_all(x, "\\d+(?=[*])") %>% sapply(function (x) sum(as.integer(x)))
+  ifelse(y == 0, 1, y)
+}
+
+jobs <- "bjobs -u all -o \"jobid job_name user proj_name queue stat cpu_used nthreads exec_host time_left delimiter='^'\" " %>%
+  pipe %>%
+  read_delim(col_types = cols(
+    JOBID = col_double(),
+    JOB_NAME = col_character(),
+    USER = col_character(),
+    PROJ_NAME = col_character(),
+    QUEUE = col_character(),
+    STAT = col_character(),
+    CPU_USED = col_character(),
+    NTHREADS = col_double(),
+    EXEC_HOST = col_character(),
+    TIME_LEFT = col_character()
+    ), delim = "^", na = "-", guess_max = 1e6) %>%
+  mutate(ncore = ncores(EXEC_HOST))
+
+message("Users")
+ujobs <- jobs %>%
+  filter(STAT == "RUN" & QUEUE == "long") %>%
+  group_by(USER) %>%
+  summarise(ncores = sum(ncore), njobs = n(), avgcores = mean(ncore), .groups = "drop")
+
+paste(c("finger -s", ujobs$USER, "| sed -r 's/[[:blank:]]+/\\t/;s/\\s\\s+.+//'"), collapse = " ") %>%
+  pipe %>%
+  read_tsv(col_types = "cc") %>%
+  distinct %>%
+  right_join(ujobs, by = c("Login" = "USER")) %>%
+  arrange(-ncores) %>%
+  print(n = Inf)
+
+message("\nProjects")
+jobs %>% 
+  filter(STAT == "RUN" & QUEUE == "long") %>% 
+  group_by(PROJ_NAME) %>%
+  summarise(ncores = sum(ncore), njobs = n(), avgcores = mean(ncore), users = n_distinct(USER), .groups = "drop") %>%
+  arrange(-ncores) %>%
+  print(n = Inf)
