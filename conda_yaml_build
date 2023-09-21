@@ -3,7 +3,7 @@
 # This script generates a YAML file containing information about the dependencies of R packages.
 
 # Set the script version and initial values for command-line options
-VERSION=1.1
+VERSION=1.2
 no_ver=FALSE
 no_val=FALSE
 strip_extra=FALSE
@@ -13,7 +13,7 @@ update=FALSE
 
 # Function to display help information
 display_help() {
-  echo "Script Usage: script.sh [options]"
+  echo "Script Usage: conda_yaml_build [options]"
   echo ""
   echo "Options:"
   echo "  -h, --help          Display this help information"
@@ -71,7 +71,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Source the ~/.bashrc file for custom Bash configurations
-. ~/.bashrc
+if [[ -f ~/.bashrc ]]; then
+  . ~/.bashrc
+fi
 
 # Function to find dependencies based on the provided directory
 find_deps() {
@@ -85,7 +87,7 @@ find_deps() {
     perl -pe 's/.+(\s|\(|:)(.+)::.+$/\2/' | \
     sed -e $'s/, /\\n/g' -e 's/#.*$//' -e 's/[[:blank:]]+/ /g' \
       -e 's/^\s|\s$//g' -e 's/)*$//g' -e 's/^(*//' -e 's/["]//g'| \
-    sed -r 's/[[:blank:]]+/ /g;s/^\s|\s$//g;s/[):]*$//g' | \
+    sed -r 's/[[:blank:]]+/ /g;s/^[[:blank:]]|[[:blank:]]$//g;s/[):]*$//g' | \
     sort -u | \
     awk '
       BEGIN {
@@ -107,21 +109,18 @@ find_deps() {
 # Function to retrieve package versions and perform validation
 # Sets the $yaml_fixed and $yaml_all variables
 get_versions () {
-  local tried=FALSE
   mamba env create -f $1 -n test__test__test 2>&1 | tee test_test_test.log >&2
   if grep -q "Executing transaction: .* done" test_test_test.log; then
+    echo Extracting environment yaml. >&2
     export yaml_fixed=$(cat $1)
-    cat test_test_test.log >&2
     rm test_test_test.log
     conda activate test__test__test && \
     env_yaml=$(conda env export)
 
-    echo got environment >&2
-
+    echo Cleaning up. >&2
     conda deactivate && \
       conda env remove -n test__test__test &> /dev/null
 
-    echo removed environment >&2
     proc_env () {
       awk 'BEGIN {FS=OFS="=|[[:space:]]+"} \
        $1 ~ ":$" {sect = $1} \
@@ -134,9 +133,7 @@ get_versions () {
        NR != FNR && ($3 ~ "^r-" || $3 in a) {print "  - "$3"="$4}' \
       $1 $2
     }
-
     export yaml_all=$(proc_env $1 <(echo "$env_yaml"))
-    echo processed environment >&2
   elif grep -q "does not exist .perhaps a typo or a missing channel." test_test_test.log; then
     add_bioconda () {
       awk 'BEGIN {FS=OFS="=|[[:space:]]+"} \
@@ -146,25 +143,48 @@ get_versions () {
         $1 ~ ":$" && chan == 1 && bc != 1 {print "  - bioconda\n\n"$0; chan = 0; bc = 1; next} \
         $1 ~ ":$" {chan = 0; print; next} 1 {print}' $1
     }
-    echo Some packages not found: >&2 
+    mk_tmpfile () {
+      temp_file_fixyaml=$(mktemp)
+      mv $temp_file_fixyaml $temp_file_fixyaml.yaml
+      echo $temp_file_fixyaml.yaml
+    }
     local bad_packages=$(awk '$0 ~ "does not exist \\(perhaps a typo or a missing channel)" {print $2}' test_test_test.log)
     rm test_test_test.log
-    echo "$bad_packages" | awk '1 {print $1}' >&2
-    local step1=$(awk 'NR==FNR {a[$1]; next} $2 in a {sub("r-", "bioconductor-", $0)} 1 {print}' <(echo "$bad_packages") temp.yaml)
-    export yaml_fixed=$(add_bioconda <(echo "$step1"))
-    if [[ $tried == "TRUE" ]]; then
-      echo Could not resolve packages! >&2
+    if [[ $2 == "tried" ]]; then
+      awk 'BEGIN {FS="-"; print "\nWARNING: could not find the following R or Bioconductor packages:"} \
+           1 {print "   "$2}' <(echo "$bad_packages") >&2
+      echo >&2
+      export bad_packages_remain="$bad_packages"
+      local temp_file_fixyaml2=$(mk_tmpfile)
+      if [[ $(wc -l <<< "$bad_packages") -eq $(wc -l <<< "$3") ]]; then
+        local use_yaml=$4
+        local use_bad_packages=$3
+      else
+        local use_yaml=$1
+        local use_bad_packages=$bad_packages
+      fi
+      awk 'NR==FNR {a[$1]; next} !($2 in a) {print}' \
+        <(echo "$use_bad_packages") $use_yaml > $temp_file_fixyaml2
+      get_versions $temp_file_fixyaml2 finished none
+      rm $temp_file_fixyaml2
+    elif [[ $2 == "finished" ]]; then
+      if [[ -f test_test_test.log ]]; then
+        rm test_test_test.log
+      fi
       return 1
+    else
+      echo -e "\n\nSome packages not found. Looking in bioconductor.\n\n" >&2
+      local step1=$(awk 'NR==FNR {a[$1]; next} $2 in a {sub("r-", "bioconductor-", $0)} 1 {print}' <(echo "$bad_packages") $1)
+      export yaml_fixed=$(add_bioconda <(echo "$step1"))
+      local temp_file_fixyaml=$(mk_tmpfile)
+      echo "$yaml_fixed" > $temp_file_fixyaml
+      get_versions $temp_file_fixyaml tried "$bad_packages" $1
+      rm $temp_file_fixyaml
     fi
-    temp_file_fixyaml=$(mktemp)
-    mv $temp_file_fixyaml $temp_file_fixyaml.yaml
-    temp_file_fixyaml=$temp_file_fixyaml.yaml
-    echo "$yaml_fixed" > $temp_file_fixyaml
-    tried=TRUE
-    get_versions $temp_file_fixyaml
-    rm $temp_file_fixyaml
   else
-    rm test_test_test.log
+    if [[ -f test_test_test.log ]]; then
+      rm test_test_test.log
+    fi
     return 1
   fi
 }
@@ -200,7 +220,7 @@ else
   find_deps $PWD > $deps
 fi
 
-echo Validating and getting versions for environment. >&2
+echo -e "Validating and getting versions for environment.\n" >&2
 
 # Perform validation and version retrieval based on command-line options
 if [[ no_val = "TRUE" ]]; then
@@ -212,7 +232,11 @@ if [[ no_val = "TRUE" ]]; then
     exit 1
   fi
 else
-  get_versions $deps
+  bad_packages_remain=""
+  get_versions $deps first_try none none
+  if [[ $? == 1 ]]; then
+    exit 1
+  fi
   if [[ no_ver == "TRUE" ]]; then
     echo "$yaml_fixed"
   elif [[ $strip_extra == "TRUE" ]]; then
@@ -220,6 +244,14 @@ else
   else
     echo "$yaml_all"
   fi
+fi
+
+# Check if $bad_packages_remain is set and if so, print the packages that could not be found
+if [[ $bad_packages_remain != "" ]]; then
+  awk 'BEGIN {FS="-"; print "\nWARNING: could not find the following R or Bioconductor packages:"} \
+       1 {print "   "$2}' <(echo "$bad_packages_remain") >&2
+  echo >&2
+  echo "You may need to add these packages manually." >&2
 fi
 
 # Remove the temporary file
