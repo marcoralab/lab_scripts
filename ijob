@@ -7,6 +7,7 @@ usage: ijob [supported args] [unsupported args]
 -W    | --walltime          (140:00)              Time to request
 -m    | --mem               (4000)                Memory per core (MB)
 -q    | --queue             (automatic)           LSF Queue
+-P    | --project           (acc_LOAD)            LSF Project
 -h    | --help                                    Brings up this menu
 EOF
 }
@@ -15,6 +16,7 @@ mem=4000
 walltime="140:00"
 ncores=4
 queue="auto"
+project="acc_LOAD"
 
 while [ "$1" != "" ]; do
   case $1 in
@@ -32,6 +34,10 @@ while [ "$1" != "" ]; do
       ;;
     -q | --queue )
       queue="$2"
+      shift; shift
+      ;;
+    -P | --project )
+      project="$2"
       shift; shift
       ;;
     -h | --help )    usage
@@ -76,4 +82,4 @@ if [[ $queue == "auto" ]]; then
 fi
 
 export job_gotten=true
-bsub -P acc_LOAD -q $queue -R span[hosts=1] -R rusage[mem=$mem] -W $walltime -n $ncores $resreq ${bsub_args[@]} -Is $SHELL
+bsub -P $project -q $queue -R span[hosts=1] -R rusage[mem=$mem] -W $walltime -n $ncores $resreq ${bsub_args[@]} -Is $SHELL
