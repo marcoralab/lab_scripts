@@ -11,17 +11,45 @@ alleles_apoe <-
           "rs429358", "T", "C", 19, 44908684, 45411941,
           "rs7412", "C", "T", 19, 44908822, 45412079)
 
-calc_apoe_genotype <- function(df) {
-  mutate(df, APOE = case_when(
-    is.na(rs7412) | is.na(rs429358) ~ NA_real_,
-    grepl("0[/|]0|0[|]0", rs7412) & grepl("0[/|]0|0[|]0", rs429358) ~ 33,
-    grepl("0[/|]1|1[|]0", rs7412) & grepl("0[/|]0|0[|]0", rs429358) ~ 23,
-    grepl("1[/|]1|1[|]1", rs7412) & grepl("0[/|]0|0[|]0", rs429358) ~ 22,
-    grepl("0[/|]1|1[|]0", rs7412) & grepl("0[/|]1|1[|]0", rs429358) ~ 24,
-    grepl("0[/|]0|0[|]0", rs7412) & grepl("0[/|]1|1[|]0", rs429358) ~ 34,
-    grepl("0[/|]0|0[|]0", rs7412) & grepl("1[/|]1|1[|]1", rs429358) ~ 44,
-    TRUE ~ NA_real_
-  ))
+calc_apoe_genotype <- function(dfr) {
+  if (all(grepl("|", dfr$rs7412)) & all(grepl("|", dfr$rs429358))) {
+    final_calc <- function(rs429358, rs7412) {
+      case_when(
+        rs429358 == "C" & rs7412 == "T" ~ "1",
+        rs429358 == "T" & rs7412 == "T" ~ "2",
+        rs429358 == "T" & rs7412 == "C" ~ "3",
+        rs429358 == "C" & rs7412 == "C" ~ "4",
+        TRUE ~ NA_character_)
+    }
+    mutate(dfr,
+      rs7412 = str_replace_all(rs7412, "0", "C"),
+      rs7412 = str_replace_all(rs7412, "1", "T"),
+      rs429358 = str_replace_all(rs429358, "0", "T"),
+      rs429358 = str_replace_all(rs429358, "1", "C"),
+      rs7412_1 = str_split(rs7412, "\\|", simplify = TRUE)[, 1],
+      rs429358_1 = str_split(rs429358, "\\|", simplify = TRUE)[, 1],
+      rs7412_2 = str_split(rs7412, "\\|", simplify = TRUE)[, 2],
+      rs429358_2 = str_split(rs429358, "\\|", simplify = TRUE)[, 2],
+      APOE_1 = final_calc(rs429358_1, rs7412_1),
+      APOE_2 = final_calc(rs429358_2, rs7412_2)) |>
+    rowwise() |>
+    mutate(APOE = paste(sort(c(APOE_1, APOE_2)), collapse ="")) |>
+    ungroup() |>
+    select(-rs7412_1, -rs7412_2, -rs429358_1, -rs429358_2, -APOE_1, -APOE_2)
+  } else if (all(grepl("/", dfr$rs7412)) & all(grepl("/", dfr$rs429358))) {
+    mutate(dfr, APOE = case_when(
+      is.na(rs7412) | is.na(rs429358) ~ NA_real_,
+      grepl("0/0", rs7412) & grepl("0/0", rs429358) ~ "33",
+      grepl("0/1", rs7412) & grepl("0/0", rs429358) ~ "23",
+      grepl("1/1", rs7412) & grepl("0/0", rs429358) ~ "22",
+      grepl("0/1", rs7412) & grepl("0/1", rs429358) ~ "24",
+      grepl("0/0", rs7412) & grepl("0/1", rs429358) ~ "34",
+      grepl("0/0", rs7412) & grepl("1/1", rs429358) ~ "44",
+      TRUE ~ NA_character_
+    ))
+  } else {
+    stop("Mixed phased and unphased genotypes. Please fix VCF.", call. = FALSE)
+  }
 }
 
 count_alleles <- function(df, min_count = 1) {
@@ -30,28 +58,42 @@ count_alleles <- function(df, min_count = 1) {
     map_dbl(~ sum(as.numeric(.x)))
 
   df |>
-    mutate(mutate(across(any_of(unname(rsids)), count_allele))) %>%
+    mutate(across(any_of(unname(rsids)), count_allele)) %>%
     mutate(sum_dose = rowSums(select(., any_of(rsids)))) |>
     filter(sum_dose >= as.integer(min_count)) |>
-    select(-sum_dose) 
+    select(-sum_dose)
+}
+
+base_alleles <- function(df) {
+  base_alleles_col <- function(genotypes, varname) {
+    var_row <- alleles_raw[alleles_raw["variant"] == varname, ]
+    stopifnot(nrow(var_row) == 1)
+    genotypes |>
+      str_replace_all("0", var_row$ref) |>
+      str_replace_all("1", var_row$alt)
+  }
+  df |>
+    mutate(across(any_of(unname(rsids)), ~ base_alleles_col(.x, cur_column())))
 }
 
 helpstring <- paste(
   "A script to query genotypes from a VCF file\n",
-  "Usage: get_genotypes [vcf file] [genome build] [[allele table]] [[minimum alleles]]\n",
+  "Usage: get_genotypes [vcf file] [genome build] [[allele table]] [[allele inclusion]]\n",
   "Output: A tab separated file with columns for the sample ID (VCF_ID) and",
   "        each variant ID. The variant colums will have the number of",
-  "        alterate alleles in each sample.\n",
+  "        alterate alleles in each sample by default or the actual alleles if requested.\n",
   "Input (genome build): b38 or hg19\n",
   "Optional Input (allele table): a table with the variant name, ref allele,",
   "                               alternate allele, chromosome, build 38 pos,",
   "                               and hg19 pos. Will use APOE table below if",
   "                               not provided.\n",
-  "Optional Input (minimum alleles): Minimum number of alleles for inculsion",
-  "                                  of samples in output. Default is 1.",
+  "Optional Input (allele inclusion): Minimum number of alleles for inculsion if number",
+  "                                   of samples in output. Default is 0.",
+  "                                   If 'a' or 'alleles', show actual alleles instead",
+  "                                   of allele count.\n\n",
+  "This is the default allele table:",
   format_tsv(alleles_apoe),
   sep = "\n")
-
 
 if (interactive()) {
   in_vcf <- paste0(
@@ -62,6 +104,8 @@ if (interactive()) {
   calcfun <- calc_apoe_genotype
 } else {
   arg <- commandArgs(TRUE)
+  coltypes <- cols(.default = "?", variant = "c", ref = "c", alt = "c",
+                    chr = "c", b38 = "i", hg19 = "i")
   if (any(c("--help", "-h") %in% arg)) {
     cat(helpstring)
     q(save = "no")
@@ -75,14 +119,21 @@ if (interactive()) {
     in_vcf <- arg[[1]]
     build <- arg[[2]]
     alleles_raw <- arg[[3]] |>
-      read_tsv(col_types = "ccccii")
+      read_tsv(col_types = coltypes)
     calcfun <- count_alleles
-    min_alleles <- 1
+    min_alleles <- 0
+  } else if (length(arg) == 4 && arg[[4]] %in% c("a", "alleles")) {
+    in_vcf <- arg[[1]]
+    build <- arg[[2]]
+    alleles_raw <- arg[[3]] |>
+      read_tsv(col_types = coltypes)
+    calcfun <- base_alleles
+    min_alleles <- 0
   } else if (length(arg) == 4) {
     in_vcf <- arg[[1]]
     build <- arg[[2]]
     alleles_raw <- arg[[3]] |>
-      read_tsv(col_types = "ccccii")
+      read_tsv(col_types = coltypes)
     calcfun <- function(x) count_alleles(x, min_count=arg[[4]])
   } else {
     cat(helpstring)
