@@ -37,23 +37,27 @@ extract_version <- function(id) {
   return(version)
 }
 
+extract_all_versions <- function(id) {
+  sapply(id, extract_version, USE.NAMES = FALSE)
+}
+
 # Read GTF file
 message(sprintf("Reading GTF file: %s", input_gtf))
 gtf <- rtracklayer::import(input_gtf)
 
 # Modify ENSEMBL IDs and extract versions
 message("Extracting versions from ENSEMBL IDs")
-gtf$gene_version <- sapply(gtf$gene_id, extract_version, USE.NAMES = FALSE)
-gtf$transcript_version <-
-  sapply(gtf$transcript_id, extract_version, USE.NAMES = FALSE)
+gtf$gene_version <- extract_all_versions(gtf$gene_id)
+gtf$transcript_version <- extract_all_versions(gtf$transcript_id)
 
 # Remove version from ENSEMBL IDs
+rm_versions <- function(id) {
+  sapply(function(x) sub("\\.[^.]+$", "", x), USE.NAMES = FALSE)
+}
+
 message("Removing versions from ENSEMBL IDs")
-gtf$gene_id <-
-  sapply(gtf$gene_id, function(id) sub("\\.[^.]+$", "", id), USE.NAMES = FALSE)
-gtf$transcript_id <-
-  sapply(gtf$transcript_id, function(id) sub("\\.[^.]+$", "", id),
-        USE.NAMES = FALSE)
+gtf$gene_id <- rm_versions(gtf$gene_id)
+gtf$transcript_id <- rm_versions(gtf$transcript_id)
 
 # Write modified GTF file
 message(sprintf("Writing modified GTF file: %s", output_gtf))
