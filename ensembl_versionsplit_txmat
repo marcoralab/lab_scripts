@@ -1,0 +1,28 @@
+#!/usr/bin/env Rscript
+
+# Load the required libraries
+library(readr)
+suppressPackageStartupMessages(library(dplyr))
+library(stringr)
+
+# Parse the command line arguments
+args <- commandArgs(trailingOnly = TRUE)
+input_file <- args[1]
+output_file <- args[2]
+
+if (length(args) != 2) {
+  stop("Usage: ensembl_versionsplit_txmat input_file output_file")
+} else if (!file.exists(input_file)) {
+  stop("Input file not found")
+} else if (file.exists(output_file)) {
+  stop("Output file already exists")
+}
+
+# Do the thing
+input_file |>
+  read_tsv(col_types = cols(
+    .default = col_double(),
+    gene_id = col_character(),
+    gene_name = col_character())) |>
+  mutate(gene_id = str_remove(gene_id, "\\.[^.]+$")) |>
+  write_tsv(output_file)

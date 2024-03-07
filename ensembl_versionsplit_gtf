@@ -1,0 +1,66 @@
+#!/usr/bin/env Rscript
+
+# Parse command line arguments
+args <- commandArgs(trailingOnly = TRUE)
+
+# Check if correct number of arguments provided
+if (length(args) < 1 || length(args) > 2) {
+  cat("Usage: Rscript ensembl_versionsplit_gtf input_file [output_file]\n")
+  quit(status = 1)
+} else if (!file.exists(args[1])) {
+  cat("Error: input file does not exist\n")
+  quit(status = 1)
+} else if (!grepl("\\.gtf(\\.gz){0,1}$", args[1])) {
+  cat("Error: input file must have .gtf extension\n")
+  quit(status = 1)
+} else if (length(args) == 2 && grepl("\\.gtf(\\.gz){0,1}$", args[2])) {
+  cat("Error: output file must have .gtf extension\n")
+  quit(status = 1)
+} else if (length(args) == 2 && file.exists(args[2])) {
+  cat("Error: output file already exists\n")
+  quit(status = 1)
+} else if (length(args) == 1 && grepl("\\.gtf$", args[1])) {
+  args <- c(args, sub("\\.gtf$", "_versionsplit.gtf", args[1]))
+} else if (length(args) == 1 && grepl("\\.gtf.gz$", args[1])) {
+  args <- c(args, sub("\\.gtf.gz$", "_versionsplit.gtf.gz", args[1]))
+} else if (length(args) == 2 && args[1] == args[2]) {
+  cat("Error: input and output file paths are the same\n")
+  quit(status = 1)
+}
+
+# Get input and output file paths
+input_gtf <- args[1]
+output_gtf <- args[2]
+message(sprintf("Input file: %s", input_gtf))
+message(sprintf("Output file: %s", output_gtf))
+
+# Function to extract version from ENSEMBL IDs
+extract_version <- function(id) {
+  version <- sub("^[^.]+\\.", "", id)
+  if (is.na(version) || nchar(version) == 0) {
+    version <- NA
+  }
+  return(version)
+}
+
+# Read GTF file
+message(sprintf("Reading GTF file: %s", input_gtf))
+gtf <- rtracklayer::import(input_gtf)
+
+# Modify ENSEMBL IDs and extract versions
+message("Extracting versions from ENSEMBL IDs")
+gtf$gene_version <- sapply(gtf$gene_id, extract_version, USE.NAMES = FALSE)
+gtf$transcript_version <-
+  sapply(gtf$transcript_id, extract_version, USE.NAMES = FALSE)
+
+# Remove version from ENSEMBL IDs
+message("Removing versions from ENSEMBL IDs")
+gtf$gene_id <-
+  sapply(gtf$gene_id, function(id) sub("\\.[^.]+$", "", id), USE.NAMES = FALSE)
+gtf$transcript_id <-
+  sapply(gtf$transcript_id, function(id) sub("\\.[^.]+$", "", id),
+        USE.NAMES = FALSE)
+
+# Write modified GTF file
+message(sprintf("Writing modified GTF file: %s", output_gtf))
+rtracklayer::export(gtf, output_gtf)
