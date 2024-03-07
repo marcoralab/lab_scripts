@@ -7,15 +7,15 @@ args <- commandArgs(trailingOnly = TRUE)
 
 # Check if correct number of arguments provided and get output file path
 if (length(args) < 1 || length(args) > 2) {
-  stop("Usage: Rscript entrez2ensembl_gmt input_file [output_file]\n")
+  stop("Usage: Rscript entrez2ensembl_gmt input_file [output_file]")
 } else if (!file.exists(args[1])) {
-  stop("Error: Input file does not exist\n")
+  stop("Error: Input file does not exist")
 } else if (!grepl("\\.gmt$", args[1])) {
-  stop("Error: Input file must have .gmt extension\n")
+  stop("Error: Input file must have .gmt extension")
 } else if (length(args) == 2 && grepl("\\.gmt$", args[2])) {
-  stop("Error: Output file must have .ensembl.gmt extension\n")
+  stop("Error: Output file must have .ensembl.gmt extension")
 } else if (length(args) == 2 && args[1] == args[2]) {
-  stop("Error: Output file must be different from input file\n")
+  stop("Error: Output file must be different from input file")
 } else if (length(args) == 2) {
   output_file <- args[2]
 } else {
