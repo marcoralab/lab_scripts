@@ -52,7 +52,7 @@ calc_apoe_genotype <- function(dfr) {
   }
 }
 
-count_alleles <- function(df, min_count = 1) {
+count_alleles <- function(df, min_count = 0) {
   count_allele <- . %>%
     str_extract_all("[0-2]") %>%
     map_dbl(~ sum(as.numeric(.x)))
@@ -121,14 +121,12 @@ if (interactive()) {
     alleles_raw <- arg[[3]] |>
       read_tsv(col_types = coltypes)
     calcfun <- count_alleles
-    min_alleles <- 0
   } else if (length(arg) == 4 && arg[[4]] %in% c("a", "alleles")) {
     in_vcf <- arg[[1]]
     build <- arg[[2]]
     alleles_raw <- arg[[3]] |>
       read_tsv(col_types = coltypes)
     calcfun <- base_alleles
-    min_alleles <- 0
   } else if (length(arg) == 4) {
     in_vcf <- arg[[1]]
     build <- arg[[2]]
