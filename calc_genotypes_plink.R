@@ -47,7 +47,7 @@ calc_apoe_genotype <- function(dfr) {
 }
 
 helpstring <- paste(
-  "A script to query genotypes from a PLINK file\n",
+  "A script to query genotypes from a PLINK fileset\n",
   "Usage: calc_genotypes_plink.R [plink stem] [genome build] [[allele table]] [[allele inclusion]]\n",
   "Output: A tab separated file with columns for the FID, IID and",
   "        each variant ID. The variant colums will have the number of",

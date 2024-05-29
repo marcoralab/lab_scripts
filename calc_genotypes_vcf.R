@@ -78,7 +78,7 @@ base_alleles <- function(df) {
 
 helpstring <- paste(
   "A script to query genotypes from a VCF file\n",
-  "Usage: get_genotypes [vcf file] [genome build] [[allele table]] [[allele inclusion]]\n",
+  "Usage: calc_genotypes_vcf.R [vcf file] [genome build] [[allele table]] [[allele inclusion]]\n",
   "Output: A tab separated file with columns for the sample ID (VCF_ID) and",
   "        each variant ID. The variant colums will have the number of",
   "        alterate alleles in each sample by default or the actual alleles if requested.\n",
