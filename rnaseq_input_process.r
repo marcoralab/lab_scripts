@@ -11,7 +11,7 @@ library(tidyr)
 
 option_list <- list(
   make_option(c("-s", "--input-samplesheet"),
-              type = "character", help = "Input samplesheet"),
+              type = "character", help = "Input samplesheet", ),
   make_option(c("-c", "--input-contrasts"),
               type = "character", help = "Input contrasts matrix"),
   make_option(c("-d", "--dge"),
@@ -25,11 +25,32 @@ option_list <- list(
               help = "DGE contrasts matrix output")
 )
 
-arguments <- OptionParser(
+parser <- OptionParser(
   usage = paste("usage: %prog -s [input_samplesheet.csv]",
                 " -c [input_contrasts.csv] [[optional output files]]"),
-  option_list = option_list) |>
+  option_list = option_list)
+
+arguments <- parser |>
   parse_args()
+
+if (length(arguments[["input-samplesheet"]]) > 0) {
+  arguments[["input_samplesheet"]] <- arguments[["input-samplesheet"]]
+} else {
+  # show usage and help if no input samplesheet provided
+  print_help(parser)
+  if (length(arguments[["input-contrasts"]]) == 0) {
+    stop("Input samplesheet and contrasts not provided")
+  }
+  stop("Input samplesheet not provided")
+}
+
+if (!is.na(arguments[["input-contrasts"]])) {
+  arguments[["input_contrasts"]] <- arguments[["input-contrasts"]]
+} else {
+  # show usage and help if no input contrasts matrix provided
+  print_help(parser)
+  stop("Input contrasts matrix not provided")
+}
 
 if (!file.exists(arguments$input_samplesheet)) {
   stop("Input samplesheet", arguments$input_samplesheet, "does not exist")
@@ -37,23 +58,27 @@ if (!file.exists(arguments$input_samplesheet)) {
   stop("Input contrasts matrix", arguments$input_contrasts, "does not exist")
 }
 
-in_samplesheet <- read_csv(arguments$input_samplesheet)
-in_contrasts <- read_csv(arguments$input_contrasts)
+in_samplesheet <- arguments$input_samplesheet |>
+  read_csv(col_types = cols(.default = "c"))
+in_contrasts <- arguments$input_contrasts |>
+  read_csv(col_types = cols(.default = "c"))
 
-if ("strandeness" %in% colnames(in_samplesheet)) {
-  valid_strandeness <- c("unstranded", "forward", "reverse", "auto")
-  if (!all(in_samplesheet$strandeness %in% valid_strandeness)) {
-      stop("Invalid strandeness in samplesheet: must be one of ",
-      paste(valid_strandeness, collapse = ", "))
+if ("strandedness" %in% colnames(in_samplesheet)) {
+  valid_strandedness <- c("unstranded", "forward", "reverse", "auto")
+  if (!all(in_samplesheet$strandedness %in% valid_strandedness)) {
+    stop("Invalid strandedness in samplesheet: must be one of ",
+    paste(valid_strandedness, collapse = ", "))
   }
   intermed_samplesheet_rnaseq <- in_samplesheet |>
-    select(sample, fastq_1, fastq_2, strandeness)
-  start_samplesheet_dge <- select(in_samplesheet, -strandeness)
+    select(sample, fastq_1, fastq_2, strandedness)
+  start_samplesheet_dge <- in_samplesheet |>
+    select(-strandedness, -fastq_1, -fastq_2)
 } else {
   intermed_samplesheet_rnaseq <- in_samplesheet |>
     select(sample, fastq_1, fastq_2) |>
-    mutate(strandeness = "auto")
-  start_samplesheet_dge <- in_samplesheet
+    mutate(strandedness = "auto")
+  start_samplesheet_dge <- in_samplesheet |>
+    select(-fastq_1, -fastq_2)
 }
 
 # check for any duplicates in sample, fastq_1, or fastq_2
@@ -133,7 +158,7 @@ out_samplesheet_rnaseq <- intermed_samplesheet_rnaseq |>
   modify_path("fastq_1") |>
   modify_path("fastq_2") |>
   test_fastq_stem() |>
-  select(sample, fastq_1, fastq_2, strandeness)
+  select(sample, fastq_1, fastq_2, strandedness)
 
 # check contrast ID column is all distinct
 all_distinct(in_contrasts, "id")
@@ -209,7 +234,16 @@ if (missing_txt != "") {
 
 write_csv(out_samplesheet_rnaseq, arguments$rnaseq)
 start_samplesheet_dge |>
-  select(all_of(valid_contrasts_cols)) |>
+  left_join(select(out_samplesheet_rnaseq, -strandedness),
+            by = "sample") |>
+  select(sample, fastq_1, fastq_2, everything()) |>
+  mutate(sample = str_replace_all(sample, "-", ".")) |>
   write_csv(arguments$dge)
-write_csv(in_contrasts, arguments$contrasts)
+in_contrasts |>
+  select(all_of(valid_contrasts_cols)) |>
+  write_csv(arguments$contrasts, na = "")
 
+message("Samplesheet and contrasts matrix processed successfully")
+message("RNAseq samplesheet written to ", arguments$rnaseq)
+message("DGE samplesheet written to ", arguments$dge)
+message("Contrasts matrix written to ", arguments$contrasts)
