@@ -3,6 +3,7 @@
 suppressPackageStartupMessages(library(dplyr))
 library(readr)
 library(stringr)
+library(purrr)
 
 options(width = as.integer(system("tput cols", intern = TRUE)) - 5)
 
@@ -11,15 +12,38 @@ ncores <- function(x) {
   ifelse(y == 0, 1, y)
 }
 
-jobs <- "bjobs -u all -o \"jobid job_name user proj_name queue stat cpu_used nthreads exec_host time_left cpu_efficiency delimiter='^'\" " %>%
+all_jobnames <- "bjobs -u all -o job_name" |> system(intern = TRUE)
+
+# delim_use <-
+#   tibble(delim = c("^", "&", "$", "?"),
+#          re = c("\\^", "&", "\\$", "\\?")) |>
+#   mutate(count = map_int(re, \(x) length(str_subset(all_jobnames, x)))) |>
+#   arrange(count) |>
+#   pull(delim) |>
+#   head(1)
+# 
+# cols_bjobs <- paste(
+#   "jobid", "nthreads", "job_name", "user", "proj_name", "queue", "stat",
+#   "cpu_used", "exec_host", "time_left", "cpu_peak_efficiency"
+# )
+
+delim_use <- "^"
+cols_bjobs <- paste(
+  "jobid", "nthreads", "user", "proj_name", "queue", "stat",
+  "cpu_used", "exec_host", "time_left", "cpu_peak_efficiency"
+)
+
+jobs <-
+  "bjobs -u all -o \"%s delimiter='%s'\" " %>%
+  sprintf(cols_bjobs, delim_use) %>%
   pipe %>%
   read_delim(col_types = cols(
     .default = col_character(),
     JOBID = col_double(),
     NTHREADS = col_double(),
-    ), delim = "^", na = "-") %>%
+  ), delim = delim_use, na = "-") %>%
   mutate(ncore = ncores(EXEC_HOST),
-         CPU_EFFICIENCY = parse_number(CPU_EFFICIENCY) / 100,
+         CPU_EFFICIENCY = parse_number(CPU_PEAK_EFFICIENCY) / 100,
          nodes = str_count(EXEC_HOST, ":") + 1)
 
 message("Users")
