@@ -4,10 +4,11 @@ suppressPackageStartupMessages(library(dplyr))
 library(readr)
 library(stringr)
 
-options(width = 200)
+options(width = as.integer(system("tput cols", intern = TRUE)) - 5)
 
 ncores <- function(x) {
-  y <- str_extract_all(x, "\\d+(?=[*])") %>% sapply(function (x) sum(as.integer(x)))
+  y <- str_extract_all(x, "\\d+(?=[*])") |>
+    sapply(\(x) sum(as.integer(x)))
   ifelse(y == 0, 1, y)
 }
 
@@ -44,39 +45,73 @@ mem_human <- function(mem) {
   return(formatted_memory)
 }
 
-jobs <- "bjobs -u all -o \"jobid job_name user proj_name queue stat cpu_used nthreads exec_host time_left combined_resreq memlimit max_mem delimiter='^'\" " %>%
-  pipe %>%
+jobfilter <- function(df) {
+  filter(df, STAT == "RUN",
+         str_detect(COMBINED_RESREQ, "himem"),
+         !is.na(max_mem_b))
+}
+
+delim_use <- "^"
+cols_bjobs <- paste(
+  "jobid", "nthreads", "user", "proj_name", "queue", "stat",
+  "cpu_used", "exec_host", "time_left", "cpu_peak_efficiency",
+  "combined_resreq", "memlimit", "max_mem"
+)
+
+jobs <-
+  "bjobs -u all -o \"%s delimiter='%s'\" " |>
+  sprintf(cols_bjobs, delim_use) |>
+  pipe() |>
   read_delim(col_types = cols(
     .default = col_character(),
     JOBID = col_double(),
     NTHREADS = col_double(),
-    ), delim = "^", na = "-") %>%
+    ), delim = delim_use, na = "-") |>
   mutate(ncore = ncores(EXEC_HOST),
+         CPU_EFFICIENCY = parse_number(CPU_PEAK_EFFICIENCY) / 100,
+         nodes = str_count(EXEC_HOST, ":") + 1,
          memlimit_tot = ncore * mem_bytes(MEMLIMIT),
          max_mem_b = mem_bytes(MAX_MEM))
 
 message("Users")
-ujobs <- jobs %>%
-  filter(STAT == "RUN", str_detect(COMBINED_RESREQ, "himem"),
-         !is.na(max_mem_b)) %>%
-  group_by(USER) %>%
-  summarise(ncores = sum(ncore), njobs = n(), avgcores = mean(ncore),
-            avgmemlim = mem_human(mean(memlimit_tot)), minmemlim = mem_human(min(memlimit_tot)),
-            avgmemmax = mem_human(mean(max_mem_b)), minmemmax = mem_human(min(max_mem_b)), memmax = mem_human(max(max_mem_b)),
-            .groups = "drop")
+ujobs <- jobs |>
+  jobfilter() |>
+  group_by(USER) |>
+  summarise(
+    ncores = sum(ncore),
+    njobs = n(),
+    avgcores = mean(ncore),
+    avgmemlim = mem_human(mean(memlimit_tot)),
+    minmemlim = mem_human(min(memlimit_tot)),
+    avgmemmax = mem_human(mean(max_mem_b)),
+    minmemmax = mem_human(min(max_mem_b)),
+    memmax = mem_human(max(max_mem_b)),
+    .groups = "drop")
 
-paste(c("finger -s", ujobs$USER, "| sed -r 's/[[:blank:]]+/\\t/;s/\\s\\s+.+//'"), collapse = " ") %>%
-  pipe %>%
-  read_tsv(col_types = "cc") %>%
-  distinct %>%
-  right_join(ujobs, by = c("Login" = "USER")) %>%
-  arrange(-ncores) %>%
+c("getent passwd", ujobs$USER) |>
+  paste(collapse = " ") |> 
+  pipe() |>
+  read_delim(delim = ":", col_types = "c---c--",
+             col_names = c("Login", "Name")) |>
+  distinct() |>
+  right_join(ujobs, by = c("Login" = "USER")) |>
+  arrange(-ncores) |>
   print(n = Inf)
 
 message("\nProjects")
-jobs %>%
-  filter(STAT == "RUN", str_detect(COMBINED_RESREQ, "himem")) %>%
-  group_by(PROJ_NAME) %>%
-  summarise(ncores = sum(ncore), njobs = n(), avgcores = mean(ncore), users = n_distinct(USER), .groups = "drop") %>%
-  arrange(-ncores) %>%
+jobs |>
+  jobfilter() |>
+  group_by(PROJ_NAME) |>
+  summarise(
+    ncores = sum(ncore),
+    njobs = n(),
+    avgcores = mean(ncore),
+    users = n_distinct(USER),
+    avgmemlim = mem_human(mean(memlimit_tot)),
+    minmemlim = mem_human(min(memlimit_tot)),
+    avgmemmax = mem_human(mean(max_mem_b)),
+    minmemmax = mem_human(min(max_mem_b)),
+    memmax = mem_human(max(max_mem_b)),
+    .groups = "drop") |>
+  arrange(-ncores) |>
   print(n = Inf)

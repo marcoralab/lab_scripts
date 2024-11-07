@@ -4,45 +4,70 @@ suppressPackageStartupMessages(library(dplyr))
 library(readr)
 library(stringr)
 
+options(width = as.integer(system("tput cols", intern = TRUE)) - 5)
+
 ncores <- function(x) {
-  y <- str_extract_all(x, "\\d+(?=[*])") %>% sapply(function (x) sum(as.integer(x)))
+  y <- str_extract_all(x, "\\d+(?=[*])") |>
+    sapply(\(x) sum(as.integer(x)))
   ifelse(y == 0, 1, y)
 }
 
-jobs <- "bjobs -u all -o \"jobid job_name user proj_name queue stat cpu_used nthreads exec_host time_left delimiter='^'\" " %>%
-  pipe %>%
+jobfilter <- function(df) {
+  filter(df, STAT == "RUN" & QUEUE == "long")
+}
+
+delim_use <- "^"
+cols_bjobs <- paste(
+  "jobid", "nthreads", "user", "proj_name", "queue", "stat",
+  "cpu_used", "exec_host", "time_left", "cpu_peak_efficiency"
+)
+
+jobs <-
+  "bjobs -u all -o \"%s delimiter='%s'\" " |>
+  sprintf(cols_bjobs, delim_use) |>
+  pipe() |>
   read_delim(col_types = cols(
+    .default = col_character(),
     JOBID = col_double(),
-    JOB_NAME = col_character(),
-    USER = col_character(),
-    PROJ_NAME = col_character(),
-    QUEUE = col_character(),
-    STAT = col_character(),
-    CPU_USED = col_character(),
     NTHREADS = col_double(),
-    EXEC_HOST = col_character(),
-    TIME_LEFT = col_character()
-    ), delim = "^", na = "-", guess_max = 1e6) %>%
-  mutate(ncore = ncores(EXEC_HOST))
+    ), delim = delim_use, na = "-") |>
+  mutate(ncore = ncores(EXEC_HOST),
+         CPU_EFFICIENCY = parse_number(CPU_PEAK_EFFICIENCY) / 100,
+         nodes = str_count(EXEC_HOST, ":") + 1)
 
 message("Users")
-ujobs <- jobs %>%
-  filter(STAT == "RUN" & QUEUE == "long") %>%
-  group_by(USER) %>%
-  summarise(ncores = sum(ncore), njobs = n(), avgcores = mean(ncore), .groups = "drop")
+ujobs <- jobs |>
+  jobfilter() |>
+  group_by(USER) |>
+  summarise(
+    ncores = sum(ncore),
+    njobs = n(),
+    avgcores = mean(ncore),
+    cpu = sprintf("%.1f%%", mean(CPU_EFFICIENCY) * 100),
+    avgnodes = mean(nodes),
+    .groups = "drop")
 
-paste(c("finger -s", ujobs$USER, "| sed -r 's/[[:blank:]]+/\\t/;s/\\s\\s+.+//'"), collapse = " ") %>%
-  pipe %>%
-  read_tsv(col_types = "cc") %>%
-  distinct %>%
-  right_join(ujobs, by = c("Login" = "USER")) %>%
-  arrange(-ncores) %>%
+c("getent passwd", ujobs$USER) |>
+  paste(collapse = " ") |> 
+  pipe() |>
+  read_delim(delim = ":", col_types = "c---c--",
+             col_names = c("Login", "Name")) |>
+  distinct() |>
+  right_join(ujobs, by = c("Login" = "USER")) |>
+  arrange(-ncores) |>
   print(n = Inf)
 
 message("\nProjects")
-jobs %>% 
-  filter(STAT == "RUN" & QUEUE == "long") %>% 
-  group_by(PROJ_NAME) %>%
-  summarise(ncores = sum(ncore), njobs = n(), avgcores = mean(ncore), users = n_distinct(USER), .groups = "drop") %>%
-  arrange(-ncores) %>%
+jobs |>
+  jobfilter() |>
+  group_by(PROJ_NAME) |>
+  summarise(
+    ncores = sum(ncore),
+    njobs = n(),
+    avgcores = mean(ncore),
+    users = n_distinct(USER),
+    cpu = sprintf("%.1f%%", mean(CPU_EFFICIENCY) * 100),
+    avgnodes = mean(nodes),
+    .groups = "drop") |>
+  arrange(-ncores) |>
   print(n = Inf)
