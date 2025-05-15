@@ -49,6 +49,22 @@ def update_storage_remote_calls(lines, fname, always_dummy):
             "from urllib.request import urlopen\n"
         ],
         [
+            "FTP = FTPRemoteProvider() if iconnect else dummyprovider\n",
+            "HTTP = HTTPRemoteProvider() if iconnect else dummyprovider\n"
+        ],
+        [
+            "try:\n",
+            "  response = urlopen('https://www.google.com/', timeout=10)\n",
+            "  iconnect = True\n",
+            "except URLError as ex:\n",
+            "  iconnect = False\n"
+        ],
+        [
+            "class dummyprovider:\n",
+            "  def remote(string_, allow_redirects = \"foo\"):\n",
+            "    return string_\n"
+        ],        
+        [
             "try:\n",
             "    response = urlopen('https://www.google.com/', timeout=10)\n",
             "    iconnect = True\n",
@@ -102,6 +118,9 @@ def update_storage_remote_calls(lines, fname, always_dummy):
                 "        iconnect = True\n"
                 "    except URLError as ex:\n"
                 "        pass\n"
+                ""
+                "ftp = storage.ftp if iconnect else lambda x: x\n"
+                "http = storage.http if iconnect else lambda x: x\n"
             )
             inserted_connection_block = True
             continue
@@ -110,6 +129,7 @@ def update_storage_remote_calls(lines, fname, always_dummy):
             line.replace('HTTP.remote(', 'http(')
                 .replace('FTP.remote(', 'ftp(')
                 .replace(', immediate_close=True)', ')')
+                .replace(', allow_redirects=True)', ')')
         )
 
         if not dprov:
@@ -160,15 +180,27 @@ def process_file(path, dummyprovider=False):
     Process a single file: read, transform, write in-place,
     preserving trailing newline if present.
     """
-    with path.open('r', encoding='utf-8') as f:
-        content = f.readlines()
 
-    content = update_walltime_to_runtime(content, path)
+    procd = '### Processed by update_sm8plus.py for Snakemake 8+ ###'
+
+    with path.open('r', encoding='utf-8') as f:
+        orig = f.readlines()
+    
+    if any(procd in line or "runtime" in line for line in orig):
+        print(f"File {path} already processed. Skipping.")
+        return
+
+    content = update_walltime_to_runtime(orig, path)
     content = update_mem_mb(content, path)
     content = update_storage_remote_calls(content, path, dummyprovider)
 
-    with path.open('w', encoding='utf-8') as f:
-        f.writelines(content)
+    if content != orig:
+        print(f"Updated {path}")
+        content.append(f'\n{procd}\n')
+        with path.open('w', encoding='utf-8') as f:
+            f.writelines(content)
+    else:
+        print(f"No changes to {path}")
 
 
 def find_target_files():
