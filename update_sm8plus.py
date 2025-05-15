@@ -6,14 +6,20 @@ import argparse
 
 def update_walltime_to_runtime(lines, fname):
     """
-    Replace 'walltime: H:00' with 'runtime: Hh'
+    Replace 'walltime: H:00' with 'runtime: Hh' and 0:MM with MMm
     """
-    def repl(match):
+    def repl(match, fname):
         indent = match.group(1)
         hours = int(match.group(2))  # convert to int to remove leading zeros
-        return f'{indent}runtime: "{hours}h"\n'
+        minutes = int(match.group(3))
+        if hours > 0 and minutes > 0:
+            print(f"Warning: Non-zero minutes in time in {fname}. Please convert to hours.")
+        elif hours > 0:
+            return f'{indent}runtime: "{hours}h"\n'
+        else:
+            return f'{indent}runtime: "{minutes}m"\n'
     
-    wtre = re.compile(r'''^(\s+)walltime\s*=\s+["'](\d+):00["']\s*$''')
+    wtre = re.compile(r'''^(\s+)walltime\s*=\s+["'](\d+):(\d\d)["']\s*$''')
     
     lines_out = []
     for lnum, line in enumerate(lines):
@@ -174,8 +180,165 @@ def update_mem_mb(lines, fname):
             out.append(line)
     return out
 
+def specify_min_ver(lines):
+    """
+    Add version check to Snakefile.
+    """
 
-def process_file(path, dummyprovider=False):
+    import_line = "from snakemake.utils import min_version"
+
+    mvpat = re.compile(r"""min_version\(["'0-9.\s]+\)""")
+
+    add_version = True
+    if any(mvpat.search(line) for line in lines): # update the version
+        lines = [mvpat.sub('min_version("8.0")', line) for line in lines]
+        print("Updated version check in Snakefile")
+        if any(import_line in line for line in lines):
+            return lines
+        add_version = False
+    
+    # add the import line after the last import within 20 lines of the start
+    first_twenty = lines[:min(20, len(lines) - 1)]
+    import_dex_existing = [i for i, line in enumerate(first_twenty) if 'import' in line]
+    if import_dex_existing:
+        import_dex = import_dex_existing[-1] + 1
+    else: # insert after any initial comments; detect #, """ or '''
+        import_dex = next((i for i, line in enumerate(first_twenty) if re.search(r'^\s*["\']{3}', line)), 0)
+        if import_dex == 0:
+            import_dex = next((i for i, line in enumerate(first_twenty) if re.search(r'^\s*#', line)), 0)
+    lines.insert(import_dex, import_line + '\n')
+    if add_version:
+        lines.insert(import_dex + 1, 'min_version("8.0")\n')
+        print("Added version check to Snakefile")
+    return lines
+
+def detect_sm8plus(path):
+    """
+    Returns True if the Snakefile contains a min_version call with version >= 8.0.
+    Ignores any content after a '#' character on each line (inline comments).
+    Returns False if min_version is not present or version is less than 8.
+    """
+    mvpat = re.compile(r"""min_version\(\s*['"]([0-9.]+)['"]\s*\)""")
+    
+    with path.open('r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    for line in lines:
+        code_part = line.split('#', 1)[0]  # Remove everything after '#' (inline comment)
+        match = mvpat.search(code_part)
+        if match:
+            version_str = match.group(1)
+            try:
+                major = int(version_str.split('.')[0])
+                return major >= 8
+            except ValueError:
+                return False
+    return False
+
+def cluster_yaml_to_profile():
+    """
+    Convert cluster.yaml to a Snakemake profile.
+    """
+    import os
+
+    def remove_empty_values(d):
+        """
+        Remove empty categories or items from config
+        """
+        result = {}
+        for k, v in d.items():
+            if isinstance(v, dict):
+                cleaned = remove_empty_values(v)
+                if cleaned:  # skip if empty dict
+                    result[k] = cleaned
+            elif v != "":  # skip empty strings
+                result[k] = v
+        return result
+
+    try:
+        import yaml
+    except ImportError:
+        print("Warning: PyYAML is not installed. Please install it to convert cluster.yaml to Snakemake profile.")
+        return
+
+    if not os.path.exists('cluster.yaml'):
+        print("Warning: No cluster.yaml file found. Skipping conversion.")
+        return
+
+    if os.path.exists('profiles/default/config.yaml'):
+        print("Warning: Profile directory already exists. Skipping conversion.")
+        return
+    else:
+        os.makedirs('profiles/default', exist_ok=True)
+
+    with open('cluster.yaml', 'r') as file:
+        cluster_config_original = yaml.safe_load(file)
+    
+    cluster_config = {'set-resources': {}, 'set-threads': {}, 'default-resources': {}}
+    
+    wtre = re.compile(r'(\d+):(\d\d)')
+
+    add_key_if_missing = lambda k, o: {} if not k in o else o[k]
+
+    for key in cluster_config_original.keys():
+        if 'mem' in cluster_config_original[key]:
+            cluster_config['set-resources'][key] = add_key_if_missing(key, cluster_config['set-resources'])
+            cluster_config['set-resources'][key]['mem_mb'] = cluster_config_original[key].pop('mem')
+        if 'time' in cluster_config_original[key]:
+            cluster_config['set-resources'][key] = add_key_if_missing(key, cluster_config['set-resources'])
+            try:
+                time_str = cluster_config_original[key].pop('time')
+                time = wtre.match(time_str)
+                runtime_hr = int(time.group(1))
+                runtime_min = int(time.group(2))
+                if runtime_min > 0 and runtime_hr > 0:
+                    print("Warning: Non-zero minutes in time. Please convert to hours.")
+                elif runtime_min > 0:
+                    cluster_config['set-resources'][key]['runtime'] = f'{runtime_min}m'
+                else:
+                    cluster_config['set-resources'][key]['runtime'] = f'{runtime_hr}h'
+            except:
+                print(f"Warning: Unable to parse time '{time_str}' for key '{key}'. Skipping.")
+                cluster_config_original[key]['time'] = time_str
+        if 'cores' in cluster_config_original[key]:
+            if key == '__default__':
+                print("Warning: I don't know how to convert default threads. Skipping.")
+                discard = cluster_config_original[key].pop('cores')
+            else:
+                cluster_config['set-threads'][key] = cluster_config_original[key].pop('cores')
+        if 'resources' in cluster_config_original[key]:
+            cluster_config['set-resources'][key] = add_key_if_missing(key, cluster_config['set-resources'])
+            cluster_config['set-resources'][key]['lsf_extra'] = cluster_config_original[key].pop('resources')
+        if 'queue' in cluster_config_original[key]:
+            cluster_config['set-resources'][key] = add_key_if_missing(key, cluster_config['set-resources'])
+            cluster_config['set-resources'][key]['lsf_queue'] = cluster_config_original[key].pop('queue')
+        if 'project' in cluster_config_original[key]:
+            cluster_config['set-resources'][key]['lsf_project'] = cluster_config_original[key].pop('project')
+        if 'partition' in cluster_config_original[key]:
+            print("Info: partition is no longer needed on Minerva. Skipping.")
+            discard = cluster_config_original[key].pop('partition')
+    
+    if '__default__' in cluster_config['set-resources']:
+        cluster_config['default-resources'] = cluster_config['set-resources'].pop('__default__')
+
+    cluster_config = remove_empty_values(cluster_config)
+    cluster_config_original = remove_empty_values(cluster_config_original)
+
+    if cluster_config:
+        if cluster_config_original:
+            print("Warning: Some keys in cluster.yaml were not converted. Please manually convert.")
+            print("    Unconverted config:")
+            print(yaml.dump(cluster_config_original))
+
+        with open('profiles/default/config.yaml', 'w') as file:
+            yaml.dump(cluster_config, file)
+
+        print("Converted cluster.yaml to Snakemake profile.")
+    else:
+        print("Warning: No keys in cluster.yaml were converted. Please manually convert.")
+
+
+def process_file(path, dummyprovider=False, keep_mem=False, label_only=False):
     """
     Process a single file: read, transform, write in-place,
     preserving trailing newline if present.
@@ -183,22 +346,34 @@ def process_file(path, dummyprovider=False):
 
     procd = '### Processed by update_sm8plus.py for Snakemake 8+ ###'
 
+    # get the file name without the path
+    fname = path.name
+    snakefile = fname == 'Snakefile'
+
     with path.open('r', encoding='utf-8') as f:
         orig = f.readlines()
     
-    if any(procd in line or "runtime" in line for line in orig):
-        print(f"File {path} already processed. Skipping.")
-        return
+    if label_only:
+        content = orig
+    else:
+        if any(procd in line or "runtime" in line for line in orig):
+            print(f"File {path} already processed. Skipping.")
+            return
+        
+        content = update_walltime_to_runtime(orig, path)
+        content = content if keep_mem else update_mem_mb(content, path) 
+        content = update_storage_remote_calls(content, path, dummyprovider)
 
-    content = update_walltime_to_runtime(orig, path)
-    content = update_mem_mb(content, path)
-    content = update_storage_remote_calls(content, path, dummyprovider)
+    labelme = label_only or content != orig
 
-    if content != orig:
-        print(f"Updated {path}")
-        content.append(f'\n{procd}\n')
+    if snakefile or labelme:
+        if labelme:
+            content.append(f'\n{procd}\n')
+        if snakefile:
+            content = specify_min_ver(content)
         with path.open('w', encoding='utf-8') as f:
             f.writelines(content)
+        print(f"Updated {path}")
     else:
         print(f"No changes to {path}")
 
@@ -218,11 +393,31 @@ def main():
         '-d', '--dummyprovider',
         help='Always use dummy provider if no internet connection',
         action='store_true')
+    parser.add_argument(
+        '-m', '--keep-mem',
+        help='Keep old mem_mb lines',
+        action='store_true')
+    parser.add_argument(
+        '-l', '--label-only',
+        help='Only add label to Snakefile, do not modify it (other than min_version)',
+        action='store_true')
+    parser.add_argument(
+        '-p', '--profile',
+        help='Convert cluster.yaml to Snakemake profile',
+        action='store_true')
     args = parser.parse_args()
     files = find_target_files()
+    snakefile = [path for path in files if path.name == 'Snakefile']
+    if len(snakefile) > 1:
+        print("Warning: More than one Snakefile found. Only the first will version checked.")
+    elif len(snakefile) == 0:
+        print("Warning: No Snakefile found. Version check not performed.")
+    elif detect_sm8plus(snakefile[0]):
+        raise ValueError("Snakefile already requires Snakemake 8+. No changes made.")
+    if args.profile:
+        cluster_yaml_to_profile()
     for path in files:
-        process_file(path, args.dummyprovider)
-
+        process_file(path, args.dummyprovider, args.keep_mem, args.label_only)
 
 if __name__ == '__main__':
     main()
