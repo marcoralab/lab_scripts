@@ -280,10 +280,14 @@ def cluster_yaml_to_profile():
 
     add_key_if_missing = lambda k, o: {} if not k in o else o[k]
 
+    if "__default__" in cluster_config_original and "cores" in cluster_config_original["__default__"]:
+        default_cores = cluster_config_original["__default__"]["cores"]
+        if default_cores != 1:
+            print("Warning: I don't know how to convert default threads. Skipping.")
+    else:
+        default_cores = 1
+
     for key in cluster_config_original.keys():
-        if 'mem' in cluster_config_original[key]:
-            cluster_config['set-resources'][key] = add_key_if_missing(key, cluster_config['set-resources'])
-            cluster_config['set-resources'][key]['mem_mb'] = cluster_config_original[key].pop('mem')
         if 'time' in cluster_config_original[key]:
             cluster_config['set-resources'][key] = add_key_if_missing(key, cluster_config['set-resources'])
             try:
@@ -301,11 +305,15 @@ def cluster_yaml_to_profile():
                 print(f"Warning: Unable to parse time '{time_str}' for key '{key}'. Skipping.")
                 cluster_config_original[key]['time'] = time_str
         if 'cores' in cluster_config_original[key]:
-            if key == '__default__':
-                print("Warning: I don't know how to convert default threads. Skipping.")
-                discard = cluster_config_original[key].pop('cores')
-            else:
-                cluster_config['set-threads'][key] = cluster_config_original[key].pop('cores')
+            cores = int(cluster_config_original[key].pop('cores'))
+            if key != '__default__':
+                cluster_config['set-threads'][key] = cores
+        else:
+            cores = default_cores
+        if 'mem' in cluster_config_original[key]:
+            mem = int(cluster_config_original[key].pop('mem')) * cores
+            cluster_config['set-resources'][key] = add_key_if_missing(key, cluster_config['set-resources'])
+            cluster_config['set-resources'][key]['mem_mb'] = mem
         if 'resources' in cluster_config_original[key]:
             cluster_config['set-resources'][key] = add_key_if_missing(key, cluster_config['set-resources'])
             cluster_config['set-resources'][key]['lsf_extra'] = cluster_config_original[key].pop('resources')
@@ -328,7 +336,8 @@ def cluster_yaml_to_profile():
         if cluster_config_original:
             print("Warning: Some keys in cluster.yaml were not converted. Please manually convert.")
             print("    Unconverted config:")
-            print(yaml.dump(cluster_config_original))
+            for line in yaml.dump(cluster_config_original).splitlines():
+                print("    " + line)
 
         with open('profiles/default/config.yaml', 'w') as file:
             yaml.dump(cluster_config, file)
