@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# Check the number of command line arguments
+if [ "$#" -eq 0 ]; then
+    export CORE_DIR="$PWD"
+    export LOG_FILE="cores_$(date +%F).log"
+elif [ "$#" -eq 1 ]; then
+    export CORE_DIR="$1"
+    export LOG_FILE="cores_$(date +%F).log"
+elif [ "$#" -gt 2 ]; then
+    echo "Usage: $0 [core_directory] [log_file]"
+    exit 1
+else
+    export CORE_DIR="$1"
+    export LOG_FILE="$2"
+fi
+
+# Print the values being used
+echo "Core directory: $CORE_DIR"
+echo "Log file: $LOG_FILE"
+
+# Function to get details of what produced the core file using gdb
+get_core_details() {
+    local core_file=$1
+    # Extract the executable path using the `file` command
+    executable_path=$(file "$core_file" | grep -oP 'execfn: \K[^,]+')
+    
+    ep_use=""
+    [ -f "$executable_path" ] && ep_use="$executable_path"
+
+    gdb_output="$(gdb $ep_use -c "$core_file" --batch \
+        -ex "info threads" \
+        -ex "thread apply all bt full" \
+        -ex "disassemble" \
+        -ex "info sharedlibrary" 2>&1)"
+    
+    echo "Timestamp: $(date)"
+    echo "Core file: $core_file"
+    echo "Executable path: $executable_path"
+    echo "GDB output:"
+    echo "$gdb_output"
+    echo "-----------------------------------------------------------------"
+}
+
+# Function to process a core file
+process_core_file() {
+    local core_file=$1
+    # use file command to check if core file is actually a core file and exit 1 if not
+    is_core=$(file "$core_file" | grep -q 'core file' && echo 1 || echo 0)
+    if [ "$is_core" -ne 1 ]; then
+        echo "Not a core file: $core_file"
+        return
+    fi
+    
+    get_core_details "$core_file" >> $LOG_FILE
+    
+    # Get the size of the core file
+    core_size=$(stat -c%s "$core_file")
+    
+    # Delete the core file and update the total size if deletion is successful
+    if rm -f "$core_file"; then
+        total_size=$(($(cat "$TOTAL_SIZE_FILE") + core_size))
+        echo "$total_size" > "$TOTAL_SIZE_FILE"
+	total_size_gb=$(echo "scale=2; $total_size / 10^9" | bc)
+	core_size_gb=$(echo "scale=2; $core_size / 10^9" | bc)
+        echo "Deleted core file: $core_file (Size: $core_size_gb gigabytes, Total deleted size: $total_size_gb gigabytes)"
+    else
+        echo "Failed to delete core file: $core_file"
+    fi
+}
+
+# Main function
+main() {
+    find "$CORE_DIR" -type f -regex '^.*/core\.[0-9]+$' | while read -r core_file; do
+         process_core_file "$core_file"
+    done
+}
+
+# Export the function and variable to be used with find
+export -f process_core_file
+export -f get_core_details
+export TOTAL_SIZE_FILE=$(mktemp)
+echo 0 > "$TOTAL_SIZE_FILE"
+
+# Run the main function
+main
