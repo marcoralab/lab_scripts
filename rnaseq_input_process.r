@@ -44,23 +44,24 @@ if (length(arguments[["input-samplesheet"]]) > 0) {
   stop("Input samplesheet not provided")
 }
 
-if (!is.na(arguments[["input-contrasts"]])) {
+has_contrasts <- TRUE
+if ("input-contrasts" %in% names(arguments) && !is.na(arguments[["input-contrasts"]])) {
   arguments[["input_contrasts"]] <- arguments[["input-contrasts"]]
 } else {
-  # show usage and help if no input contrasts matrix provided
-  print_help(parser)
-  stop("Input contrasts matrix not provided")
+  warning("Input contrasts matrix not provided")
+  has_contrasts <- FALSE
 }
 
 if (!file.exists(arguments$input_samplesheet)) {
   stop("Input samplesheet", arguments$input_samplesheet, "does not exist")
-} else if (!file.exists(arguments$input_contrasts)) {
+} else if (has_contrasts && !file.exists(arguments$input_contrasts)) {
   stop("Input contrasts matrix", arguments$input_contrasts, "does not exist")
-}
+} else if (has_contrasts) {
+  in_contrasts <- arguments$input_contrasts |>
+    read_csv(col_types = cols(.default = "c"))
+}	
 
 in_samplesheet <- arguments$input_samplesheet |>
-  read_csv(col_types = cols(.default = "c"))
-in_contrasts <- arguments$input_contrasts |>
   read_csv(col_types = cols(.default = "c"))
 
 if ("strandedness" %in% colnames(in_samplesheet)) {
@@ -160,17 +161,19 @@ out_samplesheet_rnaseq <- intermed_samplesheet_rnaseq |>
   test_fastq_stem() |>
   select(sample, fastq_1, fastq_2, strandedness)
 
-# check contrast ID column is all distinct
-all_distinct(in_contrasts, "id")
-
-# check that the columns id,variable,reference,target,blocking are in contrasts
-valid_contrasts_cols <- c("id", "variable", "reference", "target", "blocking")
-if (!all(valid_contrasts_cols %in% colnames(in_contrasts))) { # all there
-  stop("Contrasts matrix must contain columns: ",
-       paste(valid_contrasts_cols, collapse = ", "))
-} else if (!all(colnames(in_contrasts) %in% valid_contrasts_cols)) { # no others
-  stop("Contrasts matrix must only contain columns: ",
-       paste(valid_contrasts_cols, collapse = ", "))
+if (has_contrasts) {
+  # check contrast ID column is all distinct
+  all_distinct(in_contrasts, "id")
+  
+  # check that the columns id,variable,reference,target,blocking are in contrasts
+  valid_contrasts_cols <- c("id", "variable", "reference", "target", "blocking")
+  if (!all(valid_contrasts_cols %in% colnames(in_contrasts))) { # all there
+    stop("Contrasts matrix must contain columns: ",
+         paste(valid_contrasts_cols, collapse = ", "))
+  } else if (!all(colnames(in_contrasts) %in% valid_contrasts_cols)) { # no others
+    stop("Contrasts matrix must only contain columns: ",
+         paste(valid_contrasts_cols, collapse = ", "))
+  }
 }
 
 # check that the reference and target are in the samplesheet
@@ -205,7 +208,7 @@ check_reftarg <- function(reftarg,
 }
 
 check_blocking <- function(samplesheet = start_samplesheet_dge,
-                          contrasts = in_contrasts) {
+                           contrasts = in_contrasts) {
   # for each row in contrasts check that the reference and target are values
   #  in the column matching variable in the samplesheet
   contrasts |>
@@ -218,32 +221,40 @@ check_blocking <- function(samplesheet = start_samplesheet_dge,
     select(id, blocking, stopstr)
 }
 
-bad_reference <- check_reftarg("reference")
-bad_target <- check_reftarg("target")
-missing_blocking <- check_blocking()
-
-missing_txt <- bind_rows(bad_reference, bad_target, missing_blocking) |>
-  pull(stopstr) |>
-  paste(collapse = "\n")
-
-if (missing_txt != "") {
-  stop(missing_txt)
+if (has_contrasts) {
+  bad_reference <- check_reftarg("reference")
+  bad_target <- check_reftarg("target")
+  missing_blocking <- check_blocking()
+  
+  missing_txt <- bind_rows(bad_reference, bad_target, missing_blocking) |>
+    pull(stopstr) |>
+    paste(collapse = "\n")
+  
+  if (missing_txt != "") {
+    stop(missing_txt)
+  }
 }
 
 # write out the samplesheets and contrasts matrix
 
 write_csv(out_samplesheet_rnaseq, arguments$rnaseq)
-start_samplesheet_dge |>
-  left_join(select(out_samplesheet_rnaseq, -strandedness),
-            by = "sample") |>
-  select(sample, fastq_1, fastq_2, everything()) |>
-  mutate(sample = str_replace_all(sample, "-", ".")) |>
-  write_csv(arguments$dge)
-in_contrasts |>
-  select(all_of(valid_contrasts_cols)) |>
-  write_csv(arguments$contrasts, na = "")
 
-message("Samplesheet and contrasts matrix processed successfully")
+if (has_contrasts) {
+  start_samplesheet_dge |>
+    left_join(select(out_samplesheet_rnaseq, -strandedness),
+              by = "sample") |>
+    select(sample, fastq_1, fastq_2, everything()) |>
+    mutate(sample = str_replace_all(sample, "-", ".")) |>
+    write_csv(arguments$dge)
+
+  in_contrasts |>
+    select(all_of(valid_contrasts_cols)) |>
+    write_csv(arguments$contrasts, na = "")
+
+  message("Samplesheet and contrasts matrix processed successfully")
+  message("Contrasts matrix written to ", arguments$contrasts)
+  message("DGE samplesheet written to ", arguments$dge)
+} else {
+  message("Samplesheet processed successfully")
+} 
 message("RNAseq samplesheet written to ", arguments$rnaseq)
-message("DGE samplesheet written to ", arguments$dge)
-message("Contrasts matrix written to ", arguments$contrasts)
