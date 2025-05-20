@@ -44,65 +44,75 @@ def update_storage_remote_calls(lines, fname, always_dummy):
     print(f"File {fname} uses dummyprovider: {dprov}")
     dprov = always_dummy or dprov
 
-    blocks_to_remove = [
-        [
-            "from snakemake.remote.FTP import RemoteProvider as FTPRemoteProvider\n"
-        ],
-        [
-            "from snakemake.remote.HTTP import RemoteProvider as HTTPRemoteProvider\n"
-        ],
-        [
-            "from urllib.request import urlopen\n"
-        ],
-        [
-            "FTP = FTPRemoteProvider() if iconnect else dummyprovider\n",
-            "HTTP = HTTPRemoteProvider() if iconnect else dummyprovider\n"
-        ],
-        [
-            "try:\n",
-            "  response = urlopen('https://www.google.com/', timeout=10)\n",
-            "  iconnect = True\n",
-            "except URLError as ex:\n",
-            "  iconnect = False\n"
-        ],
-        [
-            "class dummyprovider:\n",
-            "  def remote(string_, allow_redirects = \"foo\"):\n",
-            "    return string_\n"
-        ],        
-        [
-            "try:\n",
-            "    response = urlopen('https://www.google.com/', timeout=10)\n",
-            "    iconnect = True\n",
-            "except URLError as ex:\n",
-            "    iconnect = False\n"
-        ],
-        [
-            "class dummyprovider:\n",
-            "    def remote(string_, allow_redirects=\"foo\", immediate_close=\"bar\"):\n",
-            "        return string_\n"
-        ],
-        [
-            "if iconnect and not ('nointernet' in config and config['nointernet']):\n",
-            "    FTP = FTPRemoteProvider()\n",
-            "    HTTP = HTTPRemoteProvider()\n",
-            "else:\n",
-            "    FTP = dummyprovider\n",
-            "    HTTP = dummyprovider\n"
-        ]
+    def normalize(line):
+        return line.strip()
+    
+    # These are blocks to remove, each defined by a list of *starting lines*
+    block_starts_to_remove = [
+        ["iconnect = iconnect and not ('nointernet' in config and config['nointernet'])"],
+        ["try:", "response = urlopen('https://www.google.com/', timeout=10)"],
+        ['if snakemake.__version__.startswith("7."):',
+         'from snakemake.remote.FTP import RemoteProvider as FTPRemoteProvider'],
+        ["from snakemake.remote.FTP import RemoteProvider as FTPRemoteProvider"],
+        ["from snakemake.remote.HTTP import RemoteProvider as HTTPRemoteProvider"],
+        ["from urllib.request import urlopen"],
+        ["FTP = FTPRemoteProvider() if iconnect else dummyprovider"],
+        ["HTTP = HTTPRemoteProvider() if iconnect else dummyprovider"],
+        ["class dummyprovider:"],
+        ["if iconnect and not ('nointernet' in config and config['nointernet']):"]
     ]
+    
+    # Normalize block start patterns
+    normalized_block_starts = [
+        [normalize(line) for line in block] for block in block_starts_to_remove
+    ]
+    
+    continuation_keywords = ("else:", "elif ", "except", "finally")
+    
+    def indentation(line):
+        return len(line) - len(line.lstrip(' '))
+    
+    def get_full_block(lines, start_idx):
+        """Return the end index of a compound block including else/except/finally."""
+        start_indent = indentation(lines[start_idx])
+        i = start_idx + 1
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+    
+            if stripped == "":
+                i += 1
+                continue
+    
+            current_indent = indentation(line)
+    
+            # Check for continuation blocks at the same indent level
+            if current_indent == start_indent and any(stripped.startswith(k) for k in continuation_keywords):
+                # It's part of the block (like `else:` or `except`)
+                # Recurse to find the end of this sub-block
+                sub_end = get_full_block(lines, i)
+                i = sub_end
+            elif current_indent <= start_indent:
+                break
+            else:
+                i += 1
+    
+        return i
 
-    # Step 1: Remove the blocks
+    # Main removal logic
     out1 = []
     i = 0
     while i < len(lines):
         matched = False
-        for block in blocks_to_remove:
-            blen = len(block)
-            if lines[i:i+blen] == block:
-                i += blen
-                matched = True
-                break
+        for pattern in normalized_block_starts:
+            pat_len = len(pattern)
+            if i + pat_len <= len(lines):
+                segment = [normalize(l) for l in lines[i:i+pat_len]]
+                if segment == pattern:
+                    block_end = get_full_block(lines, i)
+                    i = block_end
+                    matched = True
+                    break
         if not matched:
             out1.append(lines[i])
             i += 1
