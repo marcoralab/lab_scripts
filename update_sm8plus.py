@@ -6,24 +6,56 @@ import argparse
 
 def update_walltime_to_runtime(lines, fname):
     """
-    Replace 'walltime: H:00' with 'runtime: Hh' and 0:MM with MMm
+    Replace 'walltime = H:00' with 'runtime = Hh' and 0:MM with MMm
     """
-    def repl(match, fname):
+    def repl(match):
         indent = match.group(1)
         hours = int(match.group(2))  # convert to int to remove leading zeros
         minutes = int(match.group(3))
+        comma = match.group(4) or ""
+        comment = match.group(5)
         if hours > 0 and minutes > 0:
             print(f"Warning: Non-zero minutes in time in {fname}. Please convert to hours.")
+            ret = None
         elif hours > 0:
-            return f'{indent}runtime = "{hours}h"\n'
+            ret = f'{indent}runtime = "{hours}h"{comma}\n'
         else:
-            return f'{indent}runtime = "{minutes}m"\n'
+            ret = f'{indent}runtime = "{minutes}m"{comma}\n'
+        if ret and comment:
+            return f'{ret} {comment}'
+        elif ret:
+            return ret
+        else:
+            return match.group(0)
     
-    wtre = re.compile(r'''^(\s+)walltime\s*=\s+["'](\d+):(\d\d)["']\s*$''')
+    wtre = re.compile(r'''^(\s+)walltime\s*=\s+["'](\d+):(\d\d)["']\s*(,)?\s*(#.*)?$''')
     
     lines_out = []
     for lnum, line in enumerate(lines):
         if re.search(r"walltime", line):
+            edited = wtre.sub(repl, line)
+            if edited == line:
+                print(f"Warning: Line {lnum + 1} of {fname} ({line}) not changed")
+            lines_out.append(edited)
+        else:
+            lines_out.append(line)
+    return lines_out
+
+def repair_runtime(lines, fname):
+    """
+    Replace 'runtime: ".+"' with 'runtime = ".+"'
+    """
+    def repl(match):
+        indent = match.group(1)
+        runtime = match.group(2)
+        line_end = match.group(3) or ""
+        return f'{indent}runtime = "{runtime}"{line_end}\n'
+    
+    wtre = re.compile(r'''^(\s+)runtime: "([^"]+)"(.+)?$''')
+    
+    lines_out = []
+    for lnum, line in enumerate(lines):
+        if re.search(r"runtime", line):
             edited = wtre.sub(repl, line)
             if edited == line:
                 print(f"Warning: Line {lnum + 1} of {fname} ({line}) not changed")
@@ -357,7 +389,7 @@ def cluster_yaml_to_profile():
         print("Warning: No keys in cluster.yaml were converted. Please manually convert.")
 
 
-def process_file(path, dummyprovider=False, keep_mem=False, label_only=False):
+def process_file(path, dummyprovider=False, keep_mem=False, label_only=False, repair_runtime_bug=False):
     """
     Process a single file: read, transform, write in-place,
     preserving trailing newline if present.
@@ -374,6 +406,8 @@ def process_file(path, dummyprovider=False, keep_mem=False, label_only=False):
     
     if label_only:
         content = orig
+    elif repair_runtime_bug:
+        content = repair_runtime(orig, path)
     else:
         if any(procd in line or "runtime" in line for line in orig):
             print(f"File {path} already processed. Skipping.")
@@ -424,6 +458,10 @@ def main():
         '-p', '--profile',
         help='Convert cluster.yaml to Snakemake profile',
         action='store_true')
+    parser.add_argument(
+        '--repair-runtime-bug',
+        help='Repair runtime bug from previous version of script',
+        action='store_true')
     args = parser.parse_args()
     files = find_target_files()
     snakefile = [path for path in files if path.name == 'Snakefile']
@@ -436,7 +474,7 @@ def main():
     if args.profile:
         cluster_yaml_to_profile()
     for path in files:
-        process_file(path, args.dummyprovider, args.keep_mem, args.label_only)
+        process_file(path, args.dummyprovider, args.keep_mem, args.label_only, args.repair_runtime_bug)
 
 if __name__ == '__main__':
     main()
