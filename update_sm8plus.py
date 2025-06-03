@@ -15,9 +15,9 @@ def update_walltime_to_runtime(lines, fname):
         if hours > 0 and minutes > 0:
             print(f"Warning: Non-zero minutes in time in {fname}. Please convert to hours.")
         elif hours > 0:
-            return f'{indent}runtime: "{hours}h"\n'
+            return f'{indent}runtime = "{hours}h"\n'
         else:
-            return f'{indent}runtime: "{minutes}m"\n'
+            return f'{indent}runtime = "{minutes}m"\n'
     
     wtre = re.compile(r'''^(\s+)walltime\s*=\s+["'](\d+):(\d\d)["']\s*$''')
     
