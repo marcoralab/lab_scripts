@@ -18,9 +18,9 @@ def update_walltime_to_runtime(lines, fname):
             print(f"Warning: Non-zero minutes in time in {fname}. Please convert to hours.")
             ret = None
         elif hours > 0:
-            ret = f'{indent}runtime = "{hours}h"{comma}\n'
+            ret = f'{indent}runtime = "{hours}h"{comma}'
         else:
-            ret = f'{indent}runtime = "{minutes}m"{comma}\n'
+            ret = f'{indent}runtime = "{minutes}m"{comma}'
         if ret and comment:
             return f'{ret} {comment}'
         elif ret:
@@ -49,7 +49,7 @@ def repair_runtime(lines, fname):
         indent = match.group(1)
         runtime = match.group(2)
         line_end = match.group(3) or ""
-        return f'{indent}runtime = "{runtime}"{line_end}\n'
+        return f'{indent}runtime = "{runtime}"{line_end}'
     
     wtre = re.compile(r'''^(\s+)runtime: "([^"]+)"(.+)?$''')
     
@@ -57,6 +57,7 @@ def repair_runtime(lines, fname):
     for lnum, line in enumerate(lines):
         if re.search(r"runtime", line):
             edited = wtre.sub(repl, line)
+            print(f"Repairing runtime in line {lnum + 1} of {fname}: {line.strip()} -> {edited.strip()}")
             if edited == line:
                 print(f"Warning: Line {lnum + 1} of {fname} ({line}) not changed")
             lines_out.append(edited)
@@ -417,9 +418,10 @@ def process_file(path, dummyprovider=False, keep_mem=False, label_only=False, re
         content = content if keep_mem else update_mem_mb(content, path) 
         content = update_storage_remote_calls(content, path, dummyprovider)
 
-    labelme = label_only or content != orig
+    already_labeled = any(procd in line or "runtime" in line for line in orig)
+    labelme = not already_labeled and (label_only or content != orig)
 
-    if snakefile or labelme:
+    if snakefile or labelme or content != orig:
         if labelme:
             content.append(f'\n{procd}\n')
         if snakefile:
@@ -469,7 +471,7 @@ def main():
         print("Warning: More than one Snakefile found. Only the first will version checked.")
     elif len(snakefile) == 0:
         print("Warning: No Snakefile found. Version check not performed.")
-    elif detect_sm8plus(snakefile[0]):
+    elif not args.repair_runtime_bug and detect_sm8plus(snakefile[0]):
         raise ValueError("Snakefile already requires Snakemake 8+. No changes made.")
     if args.profile:
         cluster_yaml_to_profile()
