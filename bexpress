@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+bjobs -o "jobid stat queue runtimelimit" | awk '$2 == "PEND" && $3 != "express" && $3 != "interactive" && $4 <= 720 {print $1}' | while read jobid; do
+    bmod -q express $jobid
+done
