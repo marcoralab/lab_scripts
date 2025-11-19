@@ -110,7 +110,7 @@ find_deps() {
 # Sets the $yaml_fixed and $yaml_all variables
 get_versions () {
   mamba env create -f $1 -n test__test__test 2>&1 | tee test_test_test.log >&2
-  if grep -q "Executing transaction: .* done" test_test_test.log; then
+  if grep -q "Executing transaction:.*done" test_test_test.log; then
     echo Extracting environment yaml. >&2
     export yaml_fixed=$(cat $1)
     rm test_test_test.log
@@ -119,7 +119,7 @@ get_versions () {
 
     echo Cleaning up. >&2
     conda deactivate && \
-      conda env remove -n test__test__test &> /dev/null
+      conda env remove -qyn test__test__test &> /dev/null
 
     proc_env () {
       awk 'BEGIN {FS=OFS="=|[[:space:]]+"} \
