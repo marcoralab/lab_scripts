@@ -52,20 +52,14 @@ while [ "$1" != "" ]; do
 done
 
 ml proxies &> /dev/null
-
 if [[ $? -gt 0 ]]; then
-  export http_proxy="http://172.28.7.1:3128/"
-  export https_proxy="http://172.28.7.1:3128/"
-  export ftp_proxy="http://172.28.7.1:3128/"
-  export rsync_proxy="http://172.28.7.1:3128/"
-  export all_proxy="http://172.28.7.1:3128/"
+  prox=proxy.chimera.hpc.mssm.edu:3128
+  export http_proxy="$prox"
+  export https_proxy="$prox"
+  export ftp_proxy="$prox"
+  export rsync_proxy="$prox"
+  export all_proxy="$prox"
   export no_proxy="localhost,*.chimera.hpc.mssm.edu,172.28.0.0/16"
-fi
-
-if [[ $(($mem*$ncores)) -gt 190000 ]]; then
-  resreq="-R himem"
-else
-  resreq=""
 fi
 
 # Check if colon exists in $walltime
@@ -88,4 +82,4 @@ if [[ $queue == "auto" ]]; then
 fi
 
 export job_gotten=true
-bsub -P $project -q $queue -R span[hosts=1] -R rusage[mem=$mem] -W $walltime -n $ncores $resreq ${bsub_args[@]}
+bsub -P $project -q $queue -R span[hosts=1] -R rusage[mem=$mem] -W $walltime -n $ncores ${bsub_args[@]}
